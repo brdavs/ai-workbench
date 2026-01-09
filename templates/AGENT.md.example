@@ -1,0 +1,30 @@
+# AGENT.md (template)
+
+This file is **guidance** for Codex CLI (and other agents). It is not a security boundary.
+
+## Project overview
+- Tech stack:
+- Key directories:
+- How to start the stack:
+
+## Development commands
+- Lint:
+- Unit tests:
+- Integration tests:
+- Build:
+
+## Docker / Compose
+- Primary compose files:
+- Profiles:
+- Important services:
+- How to run migrations / seeds:
+
+## E2E (Playwright)
+- Base URL:
+- How to run E2E (preferred):
+- Where to find artifacts (screenshots/videos/traces):
+
+## Guardrails
+- Do not delete data volumes
+- Do not run destructive docker commands (system prune, etc.)
+- Ask before running any command that might be destructive

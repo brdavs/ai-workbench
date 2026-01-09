@@ -1,0 +1,47 @@
+services:
+  dev:
+    build: ./dev
+    user: "${AIW_UID:-1000}:${AIW_GID:-1000}"
+    working_dir: /workspace
+    volumes:
+      - "${PROJECT_DIR:-.}:/workspace"
+      - "${AIW_DIR:-$HOME/.ai-workbench}:/aiw:rw"
+      - dev_home:/home/dev
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${CODEX_HOST_DIR:-$HOME/.codex}:/home/ubuntu/.codex"
+    environment:
+      - PROJECT_DIR=/workspace
+      - PROJECT_DIR_HOST=${PROJECT_DIR}
+      - AIW_DIR=/aiw
+      - CODEX_HOME=/home/ubuntu/.codex
+    tty: true
+
+  mcp:
+    build: ./mcp
+    user: "${AIW_UID:-1000}:${AIW_GID:-1000}"
+    working_dir: /workspace
+    volumes:
+      - "${PROJECT_DIR:-.}:/workspace"
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${CODEX_HOST_DIR:-$HOME/.codex}:/home/ubuntu/.codex"
+      - "${AIW_DIR:-$HOME/.ai-workbench}:/aiw:ro"
+    extra_hosts:
+      - "local-delo2.delo.si:10.15.5.100"
+      - "local-sn2.delo.si:10.15.5.100"
+      - "local-ok.delo.si:10.15.5.100"
+      - "local-onaplus.delo.si:10.15.5.100"
+      - "local-trgovina.delo.si:10.15.5.100"
+    environment:
+      - PROJECT_DIR=/workspace
+      - MCP_ALLOW_GIT=1
+      - MCP_ALLOW_COMPOSE=1
+      - MCP_ALLOW_PLAYWRIGHT=1
+      - MCP_MAX_OUTPUT_CHARS=20000
+      - MCP_EXTRA_HOSTS=${MCP_EXTRA_HOSTS:-[]}
+      - CODEX_HOME=/home/ubuntu/.codex
+      - PROJECT_DIR_HOST=${PROJECT_DIR}
+    stdin_open: true
+    tty: false
+
+volumes:
+  dev_home:

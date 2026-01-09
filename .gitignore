@@ -1,0 +1,26 @@
+# Workbench generated content
+/e2e/
+/openspec/
+
+# Local/dev artifacts
+node_modules/
+dist/
+build/
+coverage/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Env/config
+.env
+.env.*
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs/temp
+*.log
+tmp-*

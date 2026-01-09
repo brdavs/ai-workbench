@@ -1,0 +1,509 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n "${AIW_DIR:-}" ]]; then
+  WORKBENCH_DIR="$AIW_DIR"
+else
+  SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -f "$SCRIPT_ROOT/docker-compose.yml" ]]; then
+    WORKBENCH_DIR="$SCRIPT_ROOT"
+  else
+    WORKBENCH_DIR="$HOME/.ai-workbench"
+  fi
+fi
+PROJECT_DIR="${PROJECT_DIR_HOST:-$(pwd)}"
+CODEX_HOST_DIR="${CODEX_HOST_DIR:-$HOME/.codex}"
+
+if [[ -z "${AIW_UID:-}" || -z "${AIW_GID:-}" ]]; then
+  if [[ -f "$CODEX_HOST_DIR/config.toml" ]]; then
+    AIW_UID="${AIW_UID:-$(stat -c '%u' "$CODEX_HOST_DIR/config.toml")}"
+    AIW_GID="${AIW_GID:-$(stat -c '%g' "$CODEX_HOST_DIR/config.toml")}"
+  else
+    AIW_UID="${AIW_UID:-$(id -u)}"
+    AIW_GID="${AIW_GID:-$(id -g)}"
+  fi
+fi
+
+compose() {
+  AIW_UID="$AIW_UID" AIW_GID="$AIW_GID" AIW_DIR="$WORKBENCH_DIR" PROJECT_DIR="$PROJECT_DIR" docker compose -f "$WORKBENCH_DIR/docker-compose.yml" "$@"
+}
+
+ok() { printf "\033[32m✔\033[0m %s\n" "$*"; }
+warn() { printf "\033[33m!\033[0m %s\n" "$*"; }
+err() { printf "\033[31m✘\033[0m %s\n" "$*"; }
+
+usage() {
+  cat <<'EOF'
+aiw — AI Workbench launcher (multi-project)
+
+Usage:
+  aiw shell                   open a shell inside the dev container (project mounted at /workspace)
+  aiw codex [args...]         run codex inside the dev container
+  aiw codex-agent [args...]   run codex with external OpenSpec AGENTS.md
+  aiw kilocode [args...]      run kilocode inside the dev container
+  aiw kilocode-agent [args...] run kilocode with external OpenSpec AGENTS.md
+  aiw mcp                     run MCP server (stdio) for this project (debug)
+  aiw e2e [--base-url URL] [--e2e-dir PATH] [--use-project]
+                              run Playwright E2E (project e2e service if present; otherwise fallback runner)
+                              env: AIW_E2E_NETWORK=<network> override Docker network for fallback runner
+  aiw e2e init [--force]      initialize external E2E workspace in the workbench
+  aiw e2e path                print the external E2E workspace path
+  aiw openspec <cmd>          create external OpenSpec files for the current project
+  aiw doctor                  validate Docker/Codex/MCP setup
+EOF
+}
+
+doctor() {
+  echo "AI Workbench doctor"
+  echo "Workbench: $WORKBENCH_DIR"
+  echo "Project:   $PROJECT_DIR"
+  echo
+
+  if docker version >/dev/null 2>&1; then ok "Docker engine reachable"; else err "Docker engine not reachable"; exit 1; fi
+  if docker compose version >/dev/null 2>&1; then ok "docker compose available"; else err "docker compose not available"; exit 1; fi
+
+  if [[ -f "$WORKBENCH_DIR/docker-compose.yml" ]]; then ok "Workbench compose file found"; else err "Workbench compose file missing"; exit 1; fi
+
+  if [[ -S /var/run/docker.sock ]]; then
+    DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
+    if [[ "$AIW_GID" != "$DOCKER_GID" ]]; then
+      warn "Docker socket group ($DOCKER_GID) != AIW_GID ($AIW_GID)"
+      echo "  Hint: run with AIW_GID=$DOCKER_GID aiw shell|codex"
+    else
+      ok "AIW_GID matches Docker socket group ($DOCKER_GID)"
+    fi
+  else
+    warn "Docker socket not found at /var/run/docker.sock"
+  fi
+
+  if compose run --rm dev bash -lc "git --version >/dev/null && python3 --version >/dev/null && node --version >/dev/null"; then
+    ok "dev container runs (git/python/node OK)"
+  else
+    err "dev container failed to run"
+    exit 1
+  fi
+
+  if compose run --rm dev bash -lc "codex --version >/dev/null"; then ok "Codex CLI available inside dev container"; else warn "Codex CLI not available inside dev container"; fi
+
+  if command -v codex >/dev/null 2>&1; then
+    ok "Codex CLI found on host"
+    if [[ -f "$HOME/.codex/config.toml" ]] && grep -qi "\[mcp_servers\.aiw\]" "$HOME/.codex/config.toml"; then
+      ok "Codex MCP config contains [mcp_servers.aiw]"
+    else
+      warn "Codex MCP not detected in ~/.codex/config.toml"
+      echo "  Run once: codex mcp add aiw -- aiw mcp"
+    fi
+  else
+    warn "Codex CLI not found on host (optional, recommended for MCP registration)"
+    echo "  Install once: npm i -g @openai/codex"
+    echo "  Then run once: codex mcp add aiw -- aiw mcp"
+  fi
+
+  if docker compose --project-directory "$PROJECT_DIR" config --services >/dev/null 2>&1; then
+    ok "Project docker compose config parses"
+  else
+    warn "Project docker compose config did not parse"
+  fi
+
+  if PROJECT_DIR="$PROJECT_DIR" docker compose -f "$WORKBENCH_DIR/docker-compose.yml" run --rm -e AIW_MCP_SELFTEST=1 mcp >/dev/null 2>&1; then
+    ok "MCP container self-test OK"
+  else
+    warn "MCP container self-test failed"
+  fi
+
+  echo
+  ok "Doctor finished"
+}
+
+openspec_usage() {
+  cat <<'EOF'
+aiw openspec
+
+Usage:
+  aiw openspec init [opts...]   run OpenSpec generator into the workbench repo
+  aiw openspec path             print the external OpenSpec folder path
+EOF
+}
+
+e2e_usage() {
+  cat <<'EOF'
+aiw e2e
+
+Usage:
+  aiw e2e [--base-url URL] [--e2e-dir PATH] [--use-project]
+                            run Playwright E2E (project e2e service if present; otherwise fallback runner)
+                            env: AIW_E2E_NETWORK=<network> override Docker network for fallback runner
+  aiw e2e init [--force]     initialize external E2E workspace in the workbench
+  aiw e2e path               print the external E2E workspace path
+EOF
+}
+
+openspec_repo_name() {
+  local repo_root
+  if repo_root="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)"; then
+    basename "$repo_root"
+    return
+  fi
+  basename "$PROJECT_DIR"
+}
+
+openspec_dir() {
+  local repo_name
+  repo_name="$(openspec_repo_name)"
+  printf "%s/openspec/%s" "$WORKBENCH_DIR" "$repo_name"
+}
+
+e2e_dir() {
+  local repo_name
+  repo_name="$(openspec_repo_name)"
+  printf "%s/e2e/%s" "$WORKBENCH_DIR" "$repo_name"
+}
+
+playwright_json_read() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)
+value = data
+for key in sys.argv[2:]:
+    if not isinstance(value, dict) or key not in value:
+        sys.exit(0)
+    value = value[key]
+if isinstance(value, str):
+    print(value)
+PY
+}
+
+playwright_resolve_version() {
+  local dir="$1"
+  local version=""
+  if [[ -f "$dir/node_modules/@playwright/test/package.json" ]]; then
+    version="$(playwright_json_read "$dir/node_modules/@playwright/test/package.json" version)"
+  fi
+  if [[ -z "$version" && -f "$dir/package.json" ]]; then
+    local spec=""
+    spec="$(playwright_json_read "$dir/package.json" devDependencies "@playwright/test")"
+    if [[ -z "$spec" ]]; then
+      spec="$(playwright_json_read "$dir/package.json" dependencies "@playwright/test")"
+    fi
+    if [[ -n "$spec" ]]; then
+      if [[ "$spec" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        version="$spec"
+      elif [[ "$spec" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        version="${BASH_REMATCH[1]}"
+      elif command -v npm >/dev/null 2>&1; then
+        version="$(npm view @playwright/test version 2>/dev/null || true)"
+      fi
+    fi
+  fi
+  printf "%s" "$version"
+}
+
+compose_network_name() {
+  local project_name="$1"
+  docker compose --project-directory "$PROJECT_DIR" config --format json 2>/dev/null | python3 - "$project_name" <<'PY' || true
+import json
+import sys
+
+project_name = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+name = data.get("name")
+if isinstance(name, str) and name:
+    project_name = name
+
+networks = data.get("networks")
+if not isinstance(networks, dict):
+    sys.exit(0)
+
+def network_name(key, cfg):
+    if isinstance(cfg, dict):
+        name = cfg.get("name")
+        if isinstance(name, str) and name:
+            return name
+        if cfg.get("external"):
+            return key
+    if project_name:
+        return f"{project_name}_{key}"
+    return ""
+
+def first_network_key(nets):
+    if isinstance(nets, dict):
+        for k in nets:
+            return k
+    elif isinstance(nets, list):
+        for k in nets:
+            if isinstance(k, str):
+                return k
+    return ""
+
+if "default" in networks:
+    name = network_name("default", networks.get("default"))
+    if name:
+        print(name)
+        sys.exit(0)
+
+if len(networks) == 1:
+    key = next(iter(networks))
+    name = network_name(key, networks.get(key))
+    if name:
+        print(name)
+        sys.exit(0)
+
+services = data.get("services")
+if isinstance(services, dict):
+    for svc in services.values():
+        key = first_network_key(svc.get("networks"))
+        if key:
+            name = network_name(key, networks.get(key, {}))
+            if name:
+                print(name)
+                sys.exit(0)
+PY
+}
+
+openspec_agents_host_path() {
+  local repo_name
+  repo_name="$(openspec_repo_name)"
+  printf "%s/openspec/%s/openspec/AGENTS.md" "$WORKBENCH_DIR" "$repo_name"
+}
+
+openspec_agents_container_path() {
+  local repo_name
+  repo_name="$(openspec_repo_name)"
+  printf "/aiw/openspec/%s/openspec/AGENTS.md" "$repo_name"
+}
+
+openspec_require_agents() {
+  local agents_path
+  agents_path="$(openspec_agents_host_path)"
+  if [[ ! -f "$agents_path" ]]; then
+    err "OpenSpec AGENTS.md not found: $agents_path"
+    echo "  Hint: run 'aiw openspec init' first"
+    exit 1
+  fi
+}
+
+run_agent() {
+  local mode="$1"
+  shift || true
+  openspec_require_agents
+  compose run --rm -e OPEN_SPEC_AGENTS="$(openspec_agents_container_path)" -e AIW_AGENT_MODE="$mode" dev bash -lc '
+    set -euo pipefail
+    if [[ ! -f "$OPEN_SPEC_AGENTS" ]]; then
+      echo "OpenSpec AGENTS.md not found: $OPEN_SPEC_AGENTS" >&2
+      exit 1
+    fi
+    agents_tmp="$(mktemp)"
+    python3 - "$OPEN_SPEC_AGENTS" "$agents_tmp" <<'"'"'PY'"'"'
+import re
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+text = ""
+with open(src, "r", encoding="utf-8") as fh:
+    text = fh.read()
+text = re.sub(r"<!--.*?-->", "", text, flags=re.S).strip()
+with open(dst, "w", encoding="utf-8") as fh:
+    fh.write(text.strip() + "\n")
+PY
+    project_root="${PROJECT_DIR:-/workspace}"
+    if git -C "$project_root" rev-parse --show-toplevel >/dev/null 2>&1; then
+      project_root="$(git -C "$project_root" rev-parse --show-toplevel)"
+    fi
+    project_agents="$project_root/AGENTS.md"
+    project_agents_backup=""
+    if [[ -f "$project_agents" ]]; then
+      project_agents_backup="${project_agents}.aiw.bak.$$"
+      cp "$project_agents" "$project_agents_backup"
+    fi
+    cp "$agents_tmp" "$project_agents"
+    agent_mode="${AIW_AGENT_MODE:-codex}"
+    case "$agent_mode" in
+      codex|kilocode) ;;
+      *) echo "Unknown AIW_AGENT_MODE: $agent_mode" >&2; exit 2 ;;
+    esac
+    cmd=(codex)
+    if [[ "$agent_mode" == "kilocode" ]]; then
+      rules_dir="$HOME/.kilocode/rules"
+      mkdir -p "$rules_dir"
+      cat "$agents_tmp" > "$rules_dir/openspec-agents.md"
+      cmd=(kilocode --workspace /workspace)
+    fi
+    cleanup() {
+      if [[ -n "$project_agents_backup" && -f "$project_agents_backup" ]]; then
+        mv "$project_agents_backup" "$project_agents"
+      else
+        rm -f "$project_agents"
+      fi
+      rm -f "$agents_tmp"
+    }
+    trap cleanup EXIT
+    "${cmd[@]}" "$@"
+  ' -- "$@"
+}
+
+case "${1:-shell}" in
+  shell) compose run --rm dev ;;
+  codex) shift || true; compose run --rm dev bash -lc 'codex "$@"' -- "$@" ;;
+  codex-agent)
+    shift || true
+    run_agent codex "$@"
+    ;;
+  kilocode) shift || true; compose run --rm dev bash -lc 'kilocode "$@"' -- "$@" ;;
+  kilocode-agent)
+    shift || true
+    run_agent kilocode "$@"
+    ;;
+  mcp) compose run --rm -T -i mcp ;;
+  e2e)
+    shift || true
+    case "${1:-}" in
+      init)
+        shift || true
+        FORCE=0
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --force) FORCE=1; shift;;
+            -h|--help) e2e_usage; exit 0;;
+            *) shift;;
+          esac
+        done
+        E2E_DIR="$(e2e_dir)"
+        mkdir -p "$E2E_DIR/tests/e2e"
+        if [[ -e "$E2E_DIR/package.json" && "$FORCE" -eq 0 ]]; then
+          warn "E2E workspace already exists: $E2E_DIR"
+          echo "  Use --force to overwrite templates."
+          exit 0
+        fi
+        cat > "$E2E_DIR/package.json" <<EOF
+{
+  "name": "$(openspec_repo_name)-e2e",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.57.0"
+  }
+}
+EOF
+        cat > "$E2E_DIR/playwright.config.js" <<'EOF'
+const { defineConfig } = require("@playwright/test");
+
+module.exports = defineConfig({
+  testDir: "tests/e2e",
+  use: {
+    baseURL: process.env.BASE_URL || "http://localhost:3000",
+  },
+});
+EOF
+        cat > "$E2E_DIR/tests/e2e/example.spec.js" <<'EOF'
+const { test, expect } = require("@playwright/test");
+
+test("home page responds", async ({ page }) => {
+  const response = await page.goto("/");
+  expect(response && response.ok()).toBeTruthy();
+});
+EOF
+        ok "E2E workspace initialized: $E2E_DIR"
+        exit 0
+        ;;
+      path)
+        e2e_dir
+        echo
+        exit 0
+        ;;
+      -h|--help|help)
+        e2e_usage
+        exit 0
+        ;;
+    esac
+    BASE_URL="http://localhost:3000"
+    E2E_DIR="${AIW_E2E_DIR:-}"
+    FORCE_PROJECT=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --base-url) BASE_URL="$2"; shift 2;;
+        --e2e-dir) E2E_DIR="$2"; shift 2;;
+        --use-project) FORCE_PROJECT=1; shift;;
+        *) shift;;
+      esac
+    done
+    if docker compose --project-directory "$PROJECT_DIR" config --services 2>/dev/null | grep -qx "e2e"; then
+      docker compose --project-directory "$PROJECT_DIR" run --rm e2e
+      exit 0
+    fi
+    if [[ -z "$E2E_DIR" && "$FORCE_PROJECT" -eq 0 ]]; then
+      DEFAULT_E2E_DIR="$(e2e_dir)"
+      if [[ -d "$DEFAULT_E2E_DIR" ]]; then
+        E2E_DIR="$DEFAULT_E2E_DIR"
+      fi
+    fi
+    if [[ -n "$E2E_DIR" && ! -d "$E2E_DIR" ]]; then
+      err "E2E dir not found: $E2E_DIR"
+      exit 1
+    fi
+    if [[ -n "$E2E_DIR" && -f "$E2E_DIR/package.json" && ! -d "$E2E_DIR/node_modules" ]]; then
+      if [[ -f "$E2E_DIR/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
+        warn "E2E workspace deps missing; running pnpm install"
+        (cd "$E2E_DIR" && pnpm install)
+      elif [[ -f "$E2E_DIR/yarn.lock" ]] && command -v yarn >/dev/null 2>&1; then
+        warn "E2E workspace deps missing; running yarn install"
+        (cd "$E2E_DIR" && yarn install)
+      else
+        warn "E2E workspace deps missing; running npm install"
+        (cd "$E2E_DIR" && npm install)
+      fi
+    fi
+    RUN_DIR="${E2E_DIR:-$PROJECT_DIR}"
+    PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$PROJECT_DIR")}"
+    NET="${AIW_E2E_NETWORK:-}"
+    if [[ -z "$NET" ]]; then
+      NET="$(compose_network_name "$PROJECT_NAME")"
+    fi
+    if [[ -z "$NET" ]]; then
+      NET="${PROJECT_NAME}_default"
+    fi
+    PLAYWRIGHT_VERSION="$(playwright_resolve_version "$RUN_DIR")"
+    PLAYWRIGHT_IMAGE="${AIW_PLAYWRIGHT_IMAGE:-}"
+    if [[ -n "$PLAYWRIGHT_IMAGE" ]]; then
+      if [[ -n "$PLAYWRIGHT_VERSION" && ( "$PLAYWRIGHT_IMAGE" == "mcr.microsoft.com/playwright:jammy" || "$PLAYWRIGHT_IMAGE" == "mcr.microsoft.com/playwright:latest" ) ]]; then
+        PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy"
+      fi
+    else
+      if [[ -n "$PLAYWRIGHT_VERSION" ]]; then
+        PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy"
+      else
+        PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:jammy"
+      fi
+    fi
+    docker run --rm --network "$NET" --shm-size=1g       -e "BASE_URL=$BASE_URL"       -v "$RUN_DIR:/workspace" -w /workspace       "$PLAYWRIGHT_IMAGE"       bash -lc "npx playwright test"
+    ;;
+  doctor) doctor ;;
+  openspec)
+    case "${2:-}" in
+      init)
+        shift 2 || true
+        repo_name="$(openspec_repo_name)"
+        compose run --rm -e OPEN_SPEC_OUT_DIR="/aiw/openspec/$repo_name" dev bash -lc '
+          set -euo pipefail
+          out_dir="${OPEN_SPEC_OUT_DIR:?}"
+          mkdir -p "$out_dir"
+          npx @fission-ai/openspec@latest init "$@" "$out_dir"
+        ' -- "$@"
+        ;;
+      path) openspec_dir; echo ;;
+      -h|--help|help|"") openspec_usage ;;
+      *) echo "Unknown openspec command: ${2:-}" >&2; openspec_usage; exit 2 ;;
+    esac
+    ;;
+  -h|--help|help) usage ;;
+  *) echo "Unknown command: $1" >&2; usage; exit 2 ;;
+esac
