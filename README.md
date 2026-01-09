@@ -1,4 +1,4 @@
-# AI Workbench v2 (multi-project) — Codex CLI + Kilo Code CLI + MCP tools + Playwright runner
+# AI Workbench (multi-project) — Codex CLI + Kilo Code CLI + MCP tools + Playwright runner
 
 A **reusable, dockerized AI dev workstation** you can use from **any existing project**.
 It does **not** replace your project’s own `docker-compose.yml`. It provides a consistent CLI
@@ -26,12 +26,11 @@ Use on trusted machines only.
 
 ## One-time setup (run once per machine)
 
-### 1) Unpack + install the `aiw` launcher
+### 1) Clone + install the `aiw` launcher
 Suggested location:
 
 ```bash
-mkdir -p ~/.ai-workbench
-tar -xzf ai-workbench-v2.tar.gz -C ~/.ai-workbench --strip-components=1
+git clone git@github.com:brdavs/ai-workbench.git ~/.ai-workbench
 ```
 
 Put `aiw` on your PATH:
