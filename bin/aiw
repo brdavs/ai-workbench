@@ -83,7 +83,19 @@ doctor() {
     exit 1
   fi
 
-  if compose run --rm dev bash -lc "codex --version >/dev/null"; then ok "Codex CLI available inside dev container"; else warn "Codex CLI not available inside dev container"; fi
+  local codex_version
+  local kilocode_version
+  if codex_version="$(compose run --rm dev bash -lc "codex --version" 2>/dev/null | head -n 1 | tr -d '\r')"; then
+    ok "Codex CLI available inside dev container ($codex_version)"
+  else
+    warn "Codex CLI not available inside dev container"
+  fi
+  if kilocode_version="$(compose run --rm dev bash -lc "kilocode --version" 2>/dev/null | head -n 1 | tr -d '\r')"; then
+    ok "Kilo Code CLI available inside dev container ($kilocode_version)"
+  else
+    warn "Kilo Code CLI not available inside dev container"
+  fi
+  if compose run --rm dev bash -lc "command -v openspec >/dev/null"; then ok "OpenSpec CLI available inside dev container"; else warn "OpenSpec CLI not available inside dev container"; fi
 
   if command -v codex >/dev/null 2>&1; then
     ok "Codex CLI found on host"
@@ -297,7 +309,20 @@ run_agent() {
   local mode="$1"
   shift || true
   openspec_require_agents
-  compose run --rm -e OPEN_SPEC_AGENTS="$(openspec_agents_container_path)" -e AIW_AGENT_MODE="$mode" dev bash -lc '
+  local repo_name
+  local openspec_src
+  local e2e_src
+  local -a extra_mounts=()
+  repo_name="$(openspec_repo_name)"
+  openspec_src="$WORKBENCH_DIR/openspec/$repo_name/openspec"
+  e2e_src="$WORKBENCH_DIR/e2e/$repo_name"
+  if [[ -d "$openspec_src" && ! -e "$PROJECT_DIR/openspec" ]]; then
+    extra_mounts+=(--volume "$openspec_src:/workspace/openspec")
+  fi
+  if [[ -d "$e2e_src" && ! -e "$PROJECT_DIR/e2e" ]]; then
+    extra_mounts+=(--volume "$e2e_src:/workspace/e2e")
+  fi
+  compose run --rm "${extra_mounts[@]}" -e OPEN_SPEC_AGENTS="$(openspec_agents_container_path)" -e AIW_AGENT_MODE="$mode" dev bash -lc '
     set -euo pipefail
     if [[ ! -f "$OPEN_SPEC_AGENTS" ]]; then
       echo "OpenSpec AGENTS.md not found: $OPEN_SPEC_AGENTS" >&2

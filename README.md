@@ -1,4 +1,4 @@
-# AI Workbench (multi-project) — Codex CLI + Kilo Code CLI + MCP tools + Playwright runner
+# AI Workbench
 
 A **reusable, dockerized AI dev workstation** you can use from **any existing project**.
 It does **not** replace your project’s own `docker-compose.yml`. It provides a consistent CLI
@@ -14,6 +14,7 @@ and a portable way to run **Playwright E2E** tests.
   - Docker CLI + Compose plugin (uses the **host Docker socket**)
   - **Codex CLI** (`@openai/codex`)
   - **Kilo Code CLI** (`@kilocode/cli`)
+  - **OpenSpec CLI** (`@fission-ai/openspec`)
 - **`mcp` container** (optional): MCP server exposing safe tools for:
   - `git_status`, `git_diff`, `git_commit`
   - `compose_up/down/ps/logs/exec/run` (against the *project in /workspace*)
@@ -46,6 +47,7 @@ chmod +x ~/.ai-workbench/bin/aiw
 cd ~/.ai-workbench
 docker compose build
 ```
+Re-run this to pick up updates to Codex/OpenSpec CLIs.
 
 ### 3) (Recommended) Register MCP with Codex once
 This allows Codex CLI to launch the workbench MCP server automatically when needed.
@@ -96,6 +98,8 @@ To load an external OpenSpec `AGENTS.md` (not in your project):
 ```bash
 aiw codex-agent
 ```
+This also mounts the external `openspec/` (and `e2e/` if present) into `/workspace` for that session
+when the project doesn't already have those paths.
 
 ### Docker socket permissions (common issue)
 If `aiw codex` fails to start the MCP server with a Docker socket permission error,
@@ -128,6 +132,8 @@ To load an external OpenSpec `AGENTS.md` (not in your project):
 ```bash
 aiw kilocode-agent
 ```
+This also mounts the external `openspec/` (and `e2e/` if present) into `/workspace` for that session
+when the project doesn't already have those paths.
 
 ### Run Playwright E2E
 If your project defines an `e2e` service:
@@ -180,6 +186,11 @@ aiw openspec init
 
 This runs `npx @fission-ai/openspec@latest` inside the dev container and writes to:
 `openspec/<repo-name>` under the workbench repo.
+
+OpenSpec CLI is installed in the dev container, so you can validate specs directly:
+```bash
+openspec validate <change-id> --strict
+```
 
 ```bash
 aiw openspec path

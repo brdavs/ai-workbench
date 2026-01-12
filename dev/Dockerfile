@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     docker.io docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex@latest @kilocode/cli@latest
+RUN npm install -g @openai/codex@latest @kilocode/cli@latest @fission-ai/openspec@latest
 
 RUN useradd -m -s /bin/bash dev && \
     usermod -aG docker dev || true
