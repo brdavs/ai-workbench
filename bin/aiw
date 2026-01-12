@@ -11,7 +11,7 @@ else
     WORKBENCH_DIR="$HOME/.ai-workbench"
   fi
 fi
-PROJECT_DIR="${PROJECT_DIR_HOST:-$(pwd)}"
+PROJECT_DIR="${PROJECT_DIR:-${PROJECT_DIR_HOST:-$(pwd)}}"
 CODEX_HOST_DIR="${CODEX_HOST_DIR:-$HOME/.codex}"
 
 if [[ -z "${AIW_UID:-}" || -z "${AIW_GID:-}" ]]; then
@@ -305,24 +305,96 @@ openspec_require_agents() {
   fi
 }
 
+dir_is_effectively_empty() {
+  local dir="$1"
+  if [[ ! -e "$dir" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$dir" ]]; then
+    return 1
+  fi
+  local old_shopt
+  old_shopt="$(shopt -p dotglob nullglob)"
+  shopt -s dotglob nullglob
+  local entries=("$dir"/*)
+  eval "$old_shopt"
+  if [[ ${#entries[@]} -eq 0 ]]; then
+    return 0
+  fi
+  local entry
+  for entry in "${entries[@]}"; do
+    case "$(basename "$entry")" in
+      .gitkeep|.gitignore) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+record_project_dir_state() {
+  PROJECT_OPENSPEC_PRESENT=0
+  PROJECT_E2E_PRESENT=0
+  if [[ -e "$PROJECT_DIR/openspec" ]]; then
+    PROJECT_OPENSPEC_PRESENT=1
+  fi
+  if [[ -e "$PROJECT_DIR/e2e" ]]; then
+    PROJECT_E2E_PRESENT=1
+  fi
+}
+
+cleanup_empty_dir() {
+  local dir="$1"
+  if dir_is_effectively_empty "$dir"; then
+    rmdir "$dir" 2>/dev/null || true
+  fi
+}
+
+cleanup_external_mountpoints() {
+  if [[ "${PROJECT_OPENSPEC_PRESENT:-0}" -eq 0 && "${EXTRA_MOUNTS_OPENSPEC:-0}" -eq 1 ]]; then
+    cleanup_empty_dir "$PROJECT_DIR/openspec"
+  fi
+  if [[ "${PROJECT_E2E_PRESENT:-0}" -eq 0 && "${EXTRA_MOUNTS_E2E:-0}" -eq 1 ]]; then
+    cleanup_empty_dir "$PROJECT_DIR/e2e"
+  fi
+}
+
+add_external_mounts() {
+  EXTRA_MOUNTS=()
+  EXTRA_MOUNTS_OPENSPEC=0
+  EXTRA_MOUNTS_E2E=0
+  local repo_name
+  local openspec_src
+  local e2e_src
+  repo_name="$(openspec_repo_name)"
+  openspec_src="$WORKBENCH_DIR/openspec/$repo_name/openspec"
+  e2e_src="$WORKBENCH_DIR/e2e/$repo_name"
+  if [[ -d "$openspec_src" ]] && dir_is_effectively_empty "$PROJECT_DIR/openspec"; then
+    EXTRA_MOUNTS_OPENSPEC=1
+    EXTRA_MOUNTS+=(--volume "$openspec_src:/workspace/openspec")
+  fi
+  if [[ -d "$e2e_src" ]] && dir_is_effectively_empty "$PROJECT_DIR/e2e"; then
+    EXTRA_MOUNTS_E2E=1
+    EXTRA_MOUNTS+=(--volume "$e2e_src:/workspace/e2e")
+  fi
+}
+
+run_dev() {
+  record_project_dir_state
+  add_external_mounts
+  local status=0
+  compose run --rm "${EXTRA_MOUNTS[@]}" dev "$@" || status=$?
+  cleanup_external_mountpoints
+  return "$status"
+}
+
 run_agent() {
   local mode="$1"
   shift || true
   openspec_require_agents
-  local repo_name
-  local openspec_src
-  local e2e_src
-  local -a extra_mounts=()
-  repo_name="$(openspec_repo_name)"
-  openspec_src="$WORKBENCH_DIR/openspec/$repo_name/openspec"
-  e2e_src="$WORKBENCH_DIR/e2e/$repo_name"
-  if [[ -d "$openspec_src" && ! -e "$PROJECT_DIR/openspec" ]]; then
-    extra_mounts+=(--volume "$openspec_src:/workspace/openspec")
-  fi
-  if [[ -d "$e2e_src" && ! -e "$PROJECT_DIR/e2e" ]]; then
-    extra_mounts+=(--volume "$e2e_src:/workspace/e2e")
-  fi
-  compose run --rm "${extra_mounts[@]}" -e OPEN_SPEC_AGENTS="$(openspec_agents_container_path)" -e AIW_AGENT_MODE="$mode" dev bash -lc '
+  record_project_dir_state
+  add_external_mounts
+  local status=0
+  compose run --rm "${EXTRA_MOUNTS[@]}" -e OPEN_SPEC_AGENTS="$(openspec_agents_container_path)" -e AIW_AGENT_MODE="$mode" dev bash -lc '
     set -euo pipefail
     if [[ ! -f "$OPEN_SPEC_AGENTS" ]]; then
       echo "OpenSpec AGENTS.md not found: $OPEN_SPEC_AGENTS" >&2
@@ -374,17 +446,19 @@ PY
     }
     trap cleanup EXIT
     "${cmd[@]}" "$@"
-  ' -- "$@"
+  ' -- "$@" || status=$?
+  cleanup_external_mountpoints
+  return "$status"
 }
 
 case "${1:-shell}" in
-  shell) compose run --rm dev ;;
-  codex) shift || true; compose run --rm dev bash -lc 'codex "$@"' -- "$@" ;;
+  shell) run_dev ;;
+  codex) shift || true; run_dev bash -lc 'codex "$@"' -- "$@" ;;
   codex-agent)
     shift || true
     run_agent codex "$@"
     ;;
-  kilocode) shift || true; compose run --rm dev bash -lc 'kilocode "$@"' -- "$@" ;;
+  kilocode) shift || true; run_dev bash -lc 'kilocode "$@"' -- "$@" ;;
   kilocode-agent)
     shift || true
     run_agent kilocode "$@"
