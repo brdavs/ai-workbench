@@ -111,16 +111,34 @@ AIW_GID=$(stat -c '%g' /var/run/docker.sock) aiw codex
 
 This overrides the group used by the dev container so it can access `/var/run/docker.sock`.
 
-### MCP when running Codex inside the dev container
-When you run `aiw codex`, Codex runs inside the dev container, so the MCP command must
-start the MCP container via Docker Compose. Set it once from inside `aiw shell`:
+### Rootless Docker notes
+If you use rootless Docker and bind-mount `~/.codex` into the dev container, the mount
+is owned by container root. Run the dev container as uid 0 in the user namespace so
+Codex can read it:
 
 ```bash
-codex mcp add aiw -- bash -lc 'PROJECT_DIR="$PROJECT_DIR_HOST" docker compose -f /aiw/docker-compose.yml run --rm -T mcp'
+AIW_UID=0 AIW_GID=0 aiw codex
+```
+
+Tip: add these exports to your `~/.bashrc` if you always run rootless Docker.
+
+### MCP when running Codex inside the dev container
+When you run `aiw codex`, Codex runs inside the dev container, so the MCP command must
+start the MCP container. Use the helper script (avoids `docker compose` output on stdout).
+Set it once from inside `aiw shell`:
+
+```bash
+codex mcp add aiw -- /aiw/bin/aiw-mcp-run
 ```
 
 If you see `groups: cannot find name for group ID 998`, it's harmless and does not
 affect Docker socket permissions.
+
+If the MCP image is missing, build it once:
+
+```bash
+docker --host unix:///var/run/docker.sock compose -f /aiw/docker-compose.yml build mcp
+```
 
 ### Run Kilo Code CLI
 From inside `aiw shell`:

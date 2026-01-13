@@ -7,7 +7,7 @@ services:
       - "${PROJECT_DIR:-.}:/workspace"
       - "${AIW_DIR:-$HOME/.ai-workbench}:/aiw:rw"
       - dev_home:/home/dev
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock"
       - "${CODEX_HOST_DIR:-$HOME/.codex}:/home/ubuntu/.codex"
     environment:
       - PROJECT_DIR=/workspace
@@ -22,7 +22,7 @@ services:
     working_dir: /workspace
     volumes:
       - "${PROJECT_DIR:-.}:/workspace"
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock"
       - "${CODEX_HOST_DIR:-$HOME/.codex}:/home/ubuntu/.codex"
       - "${AIW_DIR:-$HOME/.ai-workbench}:/aiw:ro"
     extra_hosts:

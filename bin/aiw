@@ -14,6 +14,10 @@ fi
 PROJECT_DIR="${PROJECT_DIR:-${PROJECT_DIR_HOST:-$(pwd)}}"
 CODEX_HOST_DIR="${CODEX_HOST_DIR:-$HOME/.codex}"
 
+ok() { printf "\033[32m✔\033[0m %s\n" "$*"; }
+warn() { printf "\033[33m!\033[0m %s\n" "$*"; }
+err() { printf "\033[31m✘\033[0m %s\n" "$*"; }
+
 if [[ -z "${AIW_UID:-}" || -z "${AIW_GID:-}" ]]; then
   if [[ -f "$CODEX_HOST_DIR/config.toml" ]]; then
     AIW_UID="${AIW_UID:-$(stat -c '%u' "$CODEX_HOST_DIR/config.toml")}"
@@ -24,13 +28,54 @@ if [[ -z "${AIW_UID:-}" || -z "${AIW_GID:-}" ]]; then
   fi
 fi
 
-compose() {
-  AIW_UID="$AIW_UID" AIW_GID="$AIW_GID" AIW_DIR="$WORKBENCH_DIR" PROJECT_DIR="$PROJECT_DIR" docker compose -f "$WORKBENCH_DIR/docker-compose.yml" "$@"
+resolve_docker_socket() {
+  local host_socket=""
+  local uid=""
+
+  DOCKER_SOCK_PATH=""
+  DOCKER_SOCK_KIND="unknown"
+
+  if [[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST:-}" =~ ^unix://(.+)$ ]]; then
+    host_socket="${BASH_REMATCH[1]}"
+    if [[ -S "$host_socket" ]]; then
+      DOCKER_SOCK_PATH="$host_socket"
+      DOCKER_SOCK_KIND="custom"
+      return
+    fi
+  fi
+
+  if [[ -z "${DOCKER_HOST:-}" ]]; then
+    if [[ -n "${XDG_RUNTIME_DIR:-}" && -S "${XDG_RUNTIME_DIR}/docker.sock" ]]; then
+      DOCKER_SOCK_PATH="${XDG_RUNTIME_DIR}/docker.sock"
+      DOCKER_SOCK_KIND="rootless"
+      DOCKER_HOST="unix://$DOCKER_SOCK_PATH"
+      export DOCKER_HOST
+      return
+    fi
+
+    uid="$(id -u)"
+    if [[ -S "/run/user/$uid/docker.sock" ]]; then
+      DOCKER_SOCK_PATH="/run/user/$uid/docker.sock"
+      DOCKER_SOCK_KIND="rootless"
+      DOCKER_HOST="unix://$DOCKER_SOCK_PATH"
+      export DOCKER_HOST
+      return
+    fi
+
+    if [[ -S /var/run/docker.sock ]]; then
+      DOCKER_SOCK_PATH="/var/run/docker.sock"
+      DOCKER_SOCK_KIND="rootful"
+      warn "Rootless Docker socket not found; falling back to /var/run/docker.sock"
+      return
+    fi
+  fi
 }
 
-ok() { printf "\033[32m✔\033[0m %s\n" "$*"; }
-warn() { printf "\033[33m!\033[0m %s\n" "$*"; }
-err() { printf "\033[31m✘\033[0m %s\n" "$*"; }
+resolve_docker_socket
+
+compose() {
+  AIW_UID="$AIW_UID" AIW_GID="$AIW_GID" AIW_DIR="$WORKBENCH_DIR" PROJECT_DIR="$PROJECT_DIR" DOCKER_SOCK_PATH="$DOCKER_SOCK_PATH" DOCKER_HOST="${DOCKER_HOST:-}" docker compose -f "$WORKBENCH_DIR/docker-compose.yml" "$@"
+}
 
 usage() {
   cat <<'EOF'
@@ -64,8 +109,8 @@ doctor() {
 
   if [[ -f "$WORKBENCH_DIR/docker-compose.yml" ]]; then ok "Workbench compose file found"; else err "Workbench compose file missing"; exit 1; fi
 
-  if [[ -S /var/run/docker.sock ]]; then
-    DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
+  if [[ -n "${DOCKER_SOCK_PATH:-}" && -S "$DOCKER_SOCK_PATH" ]]; then
+    DOCKER_GID="$(stat -c '%g' "$DOCKER_SOCK_PATH")"
     if [[ "$AIW_GID" != "$DOCKER_GID" ]]; then
       warn "Docker socket group ($DOCKER_GID) != AIW_GID ($AIW_GID)"
       echo "  Hint: run with AIW_GID=$DOCKER_GID aiw shell|codex"
@@ -73,7 +118,7 @@ doctor() {
       ok "AIW_GID matches Docker socket group ($DOCKER_GID)"
     fi
   else
-    warn "Docker socket not found at /var/run/docker.sock"
+    warn "Docker socket not found (checked rootless and /var/run/docker.sock)"
   fi
 
   if compose run --rm dev bash -lc "git --version >/dev/null && python3 --version >/dev/null && node --version >/dev/null"; then

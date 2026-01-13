@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run MCP server in a container with mounts inherited from the current dev container.
+cid="$(cat /etc/hostname)"
+docker_host="unix:///var/run/docker.sock"
+
+mcp_image="${AIW_MCP_IMAGE:-aiw-mcp:latest}"
+mcp_allow_git="${MCP_ALLOW_GIT:-1}"
+mcp_allow_compose="${MCP_ALLOW_COMPOSE:-1}"
+mcp_allow_playwright="${MCP_ALLOW_PLAYWRIGHT:-1}"
+mcp_max_output_chars="${MCP_MAX_OUTPUT_CHARS:-20000}"
+mcp_extra_hosts="${MCP_EXTRA_HOSTS:-[]}"
+
+exec docker --host "$docker_host" run --rm -i \
+  --volumes-from "$cid" \
+  --workdir /workspace \
+  -e PROJECT_DIR=/workspace \
+  -e MCP_ALLOW_GIT="$mcp_allow_git" \
+  -e MCP_ALLOW_COMPOSE="$mcp_allow_compose" \
+  -e MCP_ALLOW_PLAYWRIGHT="$mcp_allow_playwright" \
+  -e MCP_MAX_OUTPUT_CHARS="$mcp_max_output_chars" \
+  -e MCP_EXTRA_HOSTS="$mcp_extra_hosts" \
+  "$mcp_image"
