@@ -6,7 +6,7 @@ services:
     volumes:
       - "${PROJECT_DIR:-.}:/workspace"
       - "${AIW_DIR:-$HOME/.ai-workbench}:/aiw:rw"
-      - dev_home:/home/dev
+      - "dev_home:/home/dev"
       - "${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock"
       - "${CODEX_HOST_DIR:-$HOME/.codex}:/home/ubuntu/.codex"
     environment:
@@ -45,3 +45,4 @@ services:
 
 volumes:
   dev_home:
+    name: "${AIW_DEV_HOME_VOL:-dev_home}"
