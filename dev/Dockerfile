@@ -12,7 +12,7 @@ RUN apt-get update \
 
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git openssh-client \
+    git openssh-client \
     python3 python3-venv python3-pip \
     build-essential pkg-config \
     jq ripgrep fd-find unzip \
@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     docker.io docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex@latest @kilocode/cli@latest @fission-ai/openspec@latest
+RUN npm install -g @openai/codex@latest @kilocode/cli@latest @fission-ai/openspec@latest opencode-ai
 
 RUN useradd -m -s /bin/bash dev && \
     usermod -aG docker dev || true

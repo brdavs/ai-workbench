@@ -83,10 +83,18 @@ aiw — AI Workbench launcher (multi-project)
 
 Usage:
   aiw shell                   open a shell inside the dev container (project mounted at /workspace)
-  aiw codex [args...]         run codex inside the dev container
-  aiw codex-agent [args...]   run codex with external OpenSpec AGENTS.md
-  aiw kilocode [args...]      run kilocode inside the dev container
-  aiw kilocode-agent [args...] run kilocode with external OpenSpec AGENTS.md
+  aiw codex [--profile NAME] [args...]
+                              run codex inside the dev container
+  aiw codex-agent [--profile NAME] [args...]
+                              run codex with external OpenSpec AGENTS.md
+  aiw opencode [--profile NAME] [args...]
+                              run opencode inside the dev container
+  aiw opencode-agent [--profile NAME] [args...]
+                              run opencode with external OpenSpec AGENTS.md
+  aiw kilocode [--profile NAME] [args...]
+                              run kilocode inside the dev container
+  aiw kilocode-agent [--profile NAME] [args...]
+                              run kilocode with external OpenSpec AGENTS.md
   aiw mcp                     run MCP server (stdio) for this project (debug)
   aiw e2e [--base-url URL] [--e2e-dir PATH] [--use-project]
                               run Playwright E2E (project e2e service if present; otherwise fallback runner)
@@ -366,14 +374,7 @@ dir_is_effectively_empty() {
   if [[ ${#entries[@]} -eq 0 ]]; then
     return 0
   fi
-  local entry
-  for entry in "${entries[@]}"; do
-    case "$(basename "$entry")" in
-      .gitkeep|.gitignore) ;;
-      *) return 1 ;;
-    esac
-  done
-  return 0
+  return 1
 }
 
 record_project_dir_state() {
@@ -423,30 +424,157 @@ add_external_mounts() {
   fi
 }
 
-run_dev() {
+setup_external_mounts() {
   record_project_dir_state
   add_external_mounts
+  trap cleanup_external_mountpoints EXIT
+}
+
+finalize_external_mounts() {
+  cleanup_external_mountpoints
+  trap - EXIT
+}
+
+run_dev() {
+  setup_external_mounts
   local status=0
   compose run --rm "${EXTRA_MOUNTS[@]}" dev "$@" || status=$?
-  cleanup_external_mountpoints
+  finalize_external_mounts
   return "$status"
 }
 
-run_agent() {
-  local mode="$1"
+parse_profile_args() {
+  local default_profile="$1"
   shift || true
-  openspec_require_agents
-  record_project_dir_state
-  add_external_mounts
+  PROFILE_NAME="$default_profile"
+  PROFILE_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --profile|-p)
+        if [[ -z "${2:-}" ]]; then
+          err "Missing value for $1"
+          return 2
+        fi
+        PROFILE_NAME="$2"
+        shift 2
+        ;;
+      --profile=*)
+        PROFILE_NAME="${1#*=}"
+        shift
+        ;;
+      --)
+        shift
+        PROFILE_ARGS+=("$@")
+        break
+        ;;
+      *)
+        PROFILE_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+profile_safe_name() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_.-' '_'
+}
+
+compose_env_for_profile() {
+  local mode="$1"
+  local profile="$2"
+  COMPOSE_ENV=()
+  if [[ -z "$profile" ]]; then
+    return 0
+  fi
+  local safe_profile
+  safe_profile="$(profile_safe_name "$profile")"
+  if [[ -z "$safe_profile" ]]; then
+    err "Invalid ${mode} profile: $profile"
+    return 2
+  fi
+  case "$mode" in
+    codex)
+      COMPOSE_ENV+=(AIW_DEV_HOME_VOL="dev_home_codex_${safe_profile}")
+      COMPOSE_ENV+=(CODEX_HOST_DIR="${CODEX_HOST_DIR}-${safe_profile}")
+      ;;
+    opencode)
+      COMPOSE_ENV+=(AIW_DEV_HOME_VOL="dev_home_opencode_${safe_profile}")
+      ;;
+    kilocode)
+      COMPOSE_ENV+=(AIW_DEV_HOME_VOL="dev_home_kilocode_${safe_profile}")
+      ;;
+    *)
+      err "Unknown profile mode: $mode"
+      return 2
+      ;;
+  esac
+}
+
+compose_run() {
   local status=0
-  compose run --rm "${EXTRA_MOUNTS[@]}" -e OPEN_SPEC_AGENTS="$(openspec_agents_container_path)" -e AIW_AGENT_MODE="$mode" dev bash -lc '
-    set -euo pipefail
-    if [[ ! -f "$OPEN_SPEC_AGENTS" ]]; then
-      echo "OpenSpec AGENTS.md not found: $OPEN_SPEC_AGENTS" >&2
-      exit 1
-    fi
-    agents_tmp="$(mktemp)"
-    python3 - "$OPEN_SPEC_AGENTS" "$agents_tmp" <<'"'"'PY'"'"'
+  local -a compose_env=()
+  local -a run_env=()
+  if declare -p COMPOSE_ENV >/dev/null 2>&1; then
+    compose_env=("${COMPOSE_ENV[@]}")
+  fi
+  if declare -p COMPOSE_RUN_ENV >/dev/null 2>&1; then
+    run_env=("${COMPOSE_RUN_ENV[@]}")
+  fi
+  local -a run_flags=()
+  local env_var
+  for env_var in "${run_env[@]}"; do
+    run_flags+=(-e "$env_var")
+  done
+  if [[ ${#compose_env[@]} -gt 0 ]]; then
+    (export "${compose_env[@]}"; compose run --rm "${EXTRA_MOUNTS[@]}" "${run_flags[@]}" "$@") || status=$?
+  else
+    compose run --rm "${EXTRA_MOUNTS[@]}" "${run_flags[@]}" "$@" || status=$?
+  fi
+  return "$status"
+}
+
+run_cli() {
+  local mode="$1"
+  local default_profile="$2"
+  local cmd="$3"
+  shift 3
+  local -a COMPOSE_ENV=()
+  local -a COMPOSE_RUN_ENV=()
+  if ! parse_profile_args "$default_profile" "$@"; then
+    return $?
+  fi
+  local profile="$PROFILE_NAME"
+  local args=("${PROFILE_ARGS[@]}")
+  if ! compose_env_for_profile "$mode" "$profile"; then
+    return $?
+  fi
+  setup_external_mounts
+  local status=0
+  compose_run dev bash -lc "$cmd" -- "${args[@]}" || status=$?
+  finalize_external_mounts
+  return "$status"
+}
+
+run_opencode() {
+  run_cli opencode "${AIW_OPENCODE_PROFILE:-}" 'opencode "$@"' "$@"
+}
+
+run_codex() {
+  run_cli codex "${AIW_CODEX_PROFILE:-}" 'codex "$@"' "$@"
+}
+
+run_kilocode() {
+  run_cli kilocode "${AIW_KILOCODE_PROFILE:-}" 'kilocode "$@"' "$@"
+}
+
+AGENT_RUN_SCRIPT=$(cat <<'EOF'
+set -euo pipefail
+if [[ ! -f "$OPEN_SPEC_AGENTS" ]]; then
+  echo "OpenSpec AGENTS.md not found: $OPEN_SPEC_AGENTS" >&2
+  exit 1
+fi
+agents_tmp="$(mktemp)"
+python3 - "$OPEN_SPEC_AGENTS" "$agents_tmp" <<'PY'
 import re
 import sys
 
@@ -458,52 +586,85 @@ text = re.sub(r"<!--.*?-->", "", text, flags=re.S).strip()
 with open(dst, "w", encoding="utf-8") as fh:
     fh.write(text.strip() + "\n")
 PY
-    project_root="${PROJECT_DIR:-/workspace}"
-    if git -C "$project_root" rev-parse --show-toplevel >/dev/null 2>&1; then
-      project_root="$(git -C "$project_root" rev-parse --show-toplevel)"
-    fi
-    project_agents="$project_root/AGENTS.md"
-    project_agents_backup=""
-    if [[ -f "$project_agents" ]]; then
-      project_agents_backup="${project_agents}.aiw.bak.$$"
-      cp "$project_agents" "$project_agents_backup"
-    fi
-    cp "$agents_tmp" "$project_agents"
-    agent_mode="${AIW_AGENT_MODE:-codex}"
-    case "$agent_mode" in
-      codex|kilocode) ;;
-      *) echo "Unknown AIW_AGENT_MODE: $agent_mode" >&2; exit 2 ;;
-    esac
-    cmd=(codex)
-    if [[ "$agent_mode" == "kilocode" ]]; then
-      rules_dir="$HOME/.kilocode/rules"
-      mkdir -p "$rules_dir"
-      cat "$agents_tmp" > "$rules_dir/openspec-agents.md"
-      cmd=(kilocode --workspace /workspace)
-    fi
-    cleanup() {
-      if [[ -n "$project_agents_backup" && -f "$project_agents_backup" ]]; then
-        mv "$project_agents_backup" "$project_agents"
-      else
-        rm -f "$project_agents"
-      fi
-      rm -f "$agents_tmp"
-    }
-    trap cleanup EXIT
-    "${cmd[@]}" "$@"
-  ' -- "$@" || status=$?
-  cleanup_external_mountpoints
+project_root="${PROJECT_DIR:-/workspace}"
+if git -C "$project_root" rev-parse --show-toplevel >/dev/null 2>&1; then
+  project_root="$(git -C "$project_root" rev-parse --show-toplevel)"
+fi
+project_agents="$project_root/AGENTS.md"
+project_agents_backup=""
+if [[ -f "$project_agents" ]]; then
+  project_agents_backup="${project_agents}.aiw.bak.$$"
+  cp "$project_agents" "$project_agents_backup"
+fi
+cp "$agents_tmp" "$project_agents"
+agent_mode="${AIW_AGENT_MODE:-codex}"
+case "$agent_mode" in
+  codex|kilocode|opencode) ;;
+  *) echo "Unknown AIW_AGENT_MODE: $agent_mode" >&2; exit 2 ;;
+esac
+cmd=(codex)
+if [[ "$agent_mode" == "kilocode" ]]; then
+  rules_dir="$HOME/.kilocode/rules"
+  mkdir -p "$rules_dir"
+  cat "$agents_tmp" > "$rules_dir/openspec-agents.md"
+  cmd=(kilocode --workspace /workspace)
+elif [[ "$agent_mode" == "opencode" ]]; then
+  cmd=(opencode)
+fi
+cleanup() {
+  if [[ -n "$project_agents_backup" && -f "$project_agents_backup" ]]; then
+    mv "$project_agents_backup" "$project_agents"
+  else
+    rm -f "$project_agents"
+  fi
+  rm -f "$agents_tmp"
+}
+trap cleanup EXIT
+"${cmd[@]}" "$@"
+EOF
+)
+
+run_agent() {
+  local mode="$1"
+  shift || true
+  local default_profile=""
+  case "$mode" in
+    codex) default_profile="${AIW_CODEX_PROFILE:-}" ;;
+    opencode) default_profile="${AIW_OPENCODE_PROFILE:-}" ;;
+    kilocode) default_profile="${AIW_KILOCODE_PROFILE:-}" ;;
+  esac
+  if ! parse_profile_args "$default_profile" "$@"; then
+    return $?
+  fi
+  local -a COMPOSE_ENV=()
+  local -a COMPOSE_RUN_ENV=()
+  local profile="$PROFILE_NAME"
+  local args=("${PROFILE_ARGS[@]}")
+  if ! compose_env_for_profile "$mode" "$profile"; then
+    return $?
+  fi
+  openspec_require_agents
+  setup_external_mounts
+  COMPOSE_RUN_ENV=("OPEN_SPEC_AGENTS=$(openspec_agents_container_path)" "AIW_AGENT_MODE=$mode")
+  local status=0
+  compose_run dev bash -lc "$AGENT_RUN_SCRIPT" -- "${args[@]}" || status=$?
+  finalize_external_mounts
   return "$status"
 }
 
 case "${1:-shell}" in
   shell) run_dev ;;
-  codex) shift || true; run_dev bash -lc 'codex "$@"' -- "$@" ;;
+  codex) shift || true; run_codex "$@" ;;
   codex-agent)
     shift || true
     run_agent codex "$@"
     ;;
-  kilocode) shift || true; run_dev bash -lc 'kilocode "$@"' -- "$@" ;;
+  opencode) shift || true; run_opencode "$@" ;;
+  opencode-agent)
+    shift || true
+    run_agent opencode "$@"
+    ;;
+  kilocode) shift || true; run_kilocode "$@" ;;
   kilocode-agent)
     shift || true
     run_agent kilocode "$@"

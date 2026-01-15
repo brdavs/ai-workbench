@@ -15,6 +15,7 @@ and a portable way to run **Playwright E2E** tests.
   - **Codex CLI** (`@openai/codex`)
   - **Kilo Code CLI** (`@kilocode/cli`)
   - **OpenSpec CLI** (`@fission-ai/openspec`)
+  - **OpenCode CLI** (`opencode-ai`)
 - **`mcp` container** (optional): MCP server exposing safe tools for:
   - `git_status`, `git_diff`, `git_commit`
   - `compose_up/down/ps/logs/exec/run` (against the *project in /workspace*)
@@ -101,6 +102,13 @@ aiw codex-agent
 This also mounts the external `openspec/` (and `e2e/` if present) into `/workspace` for that session
 when the project doesn't already have those paths.
 
+To use multiple Codex profiles (separate `~/.codex-<name>` on the host):
+```bash
+aiw codex --profile personal
+aiw codex --profile work
+```
+You can also set `AIW_CODEX_PROFILE` to avoid typing `--profile`.
+
 ### Docker socket permissions (common issue)
 If `aiw codex` fails to start the MCP server with a Docker socket permission error,
 run with the socket's group id:
@@ -140,11 +148,43 @@ If the MCP image is missing, build it once:
 docker --host unix:///var/run/docker.sock compose -f /aiw/docker-compose.yml build mcp
 ```
 
+### Run OpenCode CLI
+From inside `aiw shell`:
+```bash
+opencode
+```
+
+Or from the host:
+```bash
+aiw opencode
+```
+
+To load an external OpenSpec `AGENTS.md` (not in your project):
+```bash
+aiw opencode-agent
+```
+This also mounts the external `openspec/` (and `e2e/` if present) into `/workspace` for that session
+when the project doesn't already have those paths.
+
+To use multiple OpenCode profiles (separate auth/session data):
+```bash
+aiw opencode --profile personal
+aiw opencode --profile work
+```
+You can also set `AIW_OPENCODE_PROFILE` to avoid typing `--profile`.
+
 ### Run Kilo Code CLI
 From inside `aiw shell`:
 ```bash
 kilocode --workspace /workspace
 ```
+
+To use multiple Kilo Code profiles:
+```bash
+aiw kilocode --profile personal
+aiw kilocode --profile work
+```
+You can also set `AIW_KILOCODE_PROFILE` to avoid typing `--profile`.
 
 To load an external OpenSpec `AGENTS.md` (not in your project):
 ```bash
@@ -238,7 +278,7 @@ It checks:
 
 See `templates/`:
 
-- `AGENT.md.example` — starter guidance file you can copy into a project root.
+- `AGENTS.md.example` — starter guidance file you can copy into a project root.
 - `docker-compose.e2e.override.yml.example` — example how to add an `e2e` service using Playwright.
 
 These are **optional** and safe to ignore.
