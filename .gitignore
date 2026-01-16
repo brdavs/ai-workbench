@@ -1,6 +1,7 @@
 # Workbench generated content
 /e2e/
 /openspec/
+/state/
 
 # Local/dev artifacts
 node_modules/

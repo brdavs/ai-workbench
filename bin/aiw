@@ -12,7 +12,8 @@ else
   fi
 fi
 PROJECT_DIR="${PROJECT_DIR:-${PROJECT_DIR_HOST:-$(pwd)}}"
-CODEX_HOST_DIR="${CODEX_HOST_DIR:-$HOME/.codex}"
+AIW_STATE_DIR="${AIW_STATE_DIR:-$WORKBENCH_DIR/state}"
+CODEX_HOST_DIR="${CODEX_HOST_DIR:-$AIW_STATE_DIR/codex/default}"
 
 ok() { printf "\033[32m✔\033[0m %s\n" "$*"; }
 warn() { printf "\033[33m!\033[0m %s\n" "$*"; }
@@ -436,9 +437,23 @@ finalize_external_mounts() {
 }
 
 run_dev() {
+  local -a COMPOSE_ENV=()
+  local -a COMPOSE_RUN_ENV=()
   setup_external_mounts
+  if ! setup_tool_state codex "${AIW_CODEX_PROFILE:-}"; then
+    finalize_external_mounts
+    return $?
+  fi
+  if ! setup_tool_state opencode "${AIW_OPENCODE_PROFILE:-}"; then
+    finalize_external_mounts
+    return $?
+  fi
+  if ! setup_tool_state kilocode "${AIW_KILOCODE_PROFILE:-}"; then
+    finalize_external_mounts
+    return $?
+  fi
   local status=0
-  compose run --rm "${EXTRA_MOUNTS[@]}" dev "$@" || status=$?
+  compose_run dev "$@" || status=$?
   finalize_external_mounts
   return "$status"
 }
@@ -479,6 +494,56 @@ profile_safe_name() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_.-' '_'
 }
 
+state_profile_name() {
+  local profile="${1:-}"
+  if [[ -z "$profile" ]]; then
+    profile="default"
+  fi
+  local safe
+  safe="$(profile_safe_name "$profile")"
+  if [[ -z "$safe" ]]; then
+    err "Invalid profile name: $profile"
+    return 2
+  fi
+  printf '%s' "$safe"
+}
+
+tool_state_dir() {
+  local tool="$1"
+  local profile="$2"
+  local safe_profile
+  safe_profile="$(state_profile_name "$profile")" || return $?
+  printf '%s/%s/%s' "$AIW_STATE_DIR" "$tool" "$safe_profile"
+}
+
+setup_tool_state() {
+  local mode="$1"
+  local profile="$2"
+  local base
+  base="$(tool_state_dir "$mode" "$profile")" || return $?
+  case "$mode" in
+    codex)
+      mkdir -p "$base"
+      COMPOSE_ENV+=(CODEX_HOST_DIR="$base")
+      ;;
+    opencode)
+      mkdir -p "$base/config" "$base/data"
+      EXTRA_MOUNTS+=(--volume "$base/config:/home/dev/.config/opencode")
+      EXTRA_MOUNTS+=(--volume "$base/data:/home/dev/.local/share/opencode")
+      COMPOSE_RUN_ENV+=(HOME=/home/dev)
+      ;;
+    kilocode)
+      mkdir -p "$base"
+      EXTRA_MOUNTS+=(--volume "$base:/home/dev/.kilocode")
+      COMPOSE_RUN_ENV+=(HOME=/home/dev)
+      ;;
+    *)
+      err "Unknown state mode: $mode"
+      return 2
+      ;;
+  esac
+}
+
 compose_env_for_profile() {
   local mode="$1"
   local profile="$2"
@@ -495,7 +560,6 @@ compose_env_for_profile() {
   case "$mode" in
     codex)
       COMPOSE_ENV+=(AIW_DEV_HOME_VOL="dev_home_codex_${safe_profile}")
-      COMPOSE_ENV+=(CODEX_HOST_DIR="${CODEX_HOST_DIR}-${safe_profile}")
       ;;
     opencode)
       COMPOSE_ENV+=(AIW_DEV_HOME_VOL="dev_home_opencode_${safe_profile}")
@@ -549,6 +613,10 @@ run_cli() {
     return $?
   fi
   setup_external_mounts
+  if ! setup_tool_state "$mode" "$profile"; then
+    finalize_external_mounts
+    return $?
+  fi
   local status=0
   compose_run dev bash -lc "$cmd" -- "${args[@]}" || status=$?
   finalize_external_mounts
@@ -645,7 +713,11 @@ run_agent() {
   fi
   openspec_require_agents
   setup_external_mounts
-  COMPOSE_RUN_ENV=("OPEN_SPEC_AGENTS=$(openspec_agents_container_path)" "AIW_AGENT_MODE=$mode")
+  if ! setup_tool_state "$mode" "$profile"; then
+    finalize_external_mounts
+    return $?
+  fi
+  COMPOSE_RUN_ENV+=("OPEN_SPEC_AGENTS=$(openspec_agents_container_path)" "AIW_AGENT_MODE=$mode")
   local status=0
   compose_run dev bash -lc "$AGENT_RUN_SCRIPT" -- "${args[@]}" || status=$?
   finalize_external_mounts

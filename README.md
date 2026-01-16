@@ -102,7 +102,7 @@ aiw codex-agent
 This also mounts the external `openspec/` (and `e2e/` if present) into `/workspace` for that session
 when the project doesn't already have those paths.
 
-To use multiple Codex profiles (separate `~/.codex-<name>` on the host):
+To use multiple Codex profiles (separate `state/codex/<name>` under `AIW_STATE_DIR` on the host):
 ```bash
 aiw codex --profile personal
 aiw codex --profile work
@@ -120,7 +120,8 @@ AIW_GID=$(stat -c '%g' /var/run/docker.sock) aiw codex
 This overrides the group used by the dev container so it can access `/var/run/docker.sock`.
 
 ### Rootless Docker notes
-If you use rootless Docker and bind-mount `~/.codex` into the dev container, the mount
+If you use rootless Docker and bind-mount the Codex state directory (for example,
+`~/.ai-workbench/state/codex/default`) into the dev container, the mount
 is owned by container root. Run the dev container as uid 0 in the user namespace so
 Codex can read it:
 
@@ -192,6 +193,19 @@ aiw kilocode-agent
 ```
 This also mounts the external `openspec/` (and `e2e/` if present) into `/workspace` for that session
 when the project doesn't already have those paths.
+
+### CLI state directories
+Auth/config state is stored on the host under `AIW_STATE_DIR` (default `~/.ai-workbench/state`).
+When no `--profile` is provided, `default` is used. These paths are bind-mounted into the dev
+container so state persists across runs.
+
+- codex: `state/codex/<profile>` -> `/home/ubuntu/.codex`
+- opencode config: `state/opencode/<profile>/config` -> `/home/dev/.config/opencode`
+- opencode data: `state/opencode/<profile>/data` -> `/home/dev/.local/share/opencode`
+- kilocode: `state/kilocode/<profile>` -> `/home/dev/.kilocode`
+
+To seed OpenCode from host defaults, copy `~/.config/opencode` into the profile `config` directory
+and `~/.local/share/opencode` into the profile `data` directory.
 
 ### Run Playwright E2E
 If your project defines an `e2e` service:
